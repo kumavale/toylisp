@@ -1,9 +1,17 @@
 use std::collections::HashMap;
 
+#[derive(Clone, Debug, PartialEq)]
+enum Token {
+    Number(i32),
+    Symbol(String),
+    LParen,
+    RParen,
+}
+
 #[derive(Debug)]
 struct Env {
     vars: HashMap<String, i32>,
-    funs: HashMap<String, (Vec<String>, Vec<String>)>,  // (params, body)
+    funs: HashMap<String, (Vec<String>, Vec<Token>)>,  // (params, body)
 }
 
 impl Env {
@@ -17,12 +25,12 @@ impl Env {
 
 #[derive(Debug, PartialEq)]
 struct Tokens {
-    tokens: Vec<String>,
+    tokens: Vec<Token>,
     pos: usize,
 }
 
 impl Tokens {
-    fn new(tokens: Vec<String>) -> Self {
+    fn new(tokens: Vec<Token>) -> Self {
         Self {
             tokens,
             pos: 0,
@@ -39,7 +47,7 @@ impl Tokens {
         }
     }
 
-    fn next(&mut self) -> Option<&str> {
+    fn next(&mut self) -> Option<&Token> {
         if let Some(token) = self.tokens.get(self.pos) {
             self.pos += 1;
             Some(token)
@@ -48,7 +56,7 @@ impl Tokens {
         }
     }
 
-    fn peek(&self) -> Option<&str> {
+    fn peek(&self) -> Option<&Token> {
         if let Some(token) = self.tokens.get(self.pos) {
             Some(token)
         } else {
@@ -62,149 +70,160 @@ fn main() {
 }
 
 fn eval(tokens: &mut Tokens, env: &mut Env) -> Result<i32, String> {
-    if tokens.next().unwrap() != "(" {
+    if *tokens.next().unwrap() != Token::LParen {
         return Err(format!("expect: '('"));
     }
 
     match tokens.peek() {
-        Some("+") |
-        Some("-") |
-        Some("*") |
-        Some("/") => {
-            let op = tokens.next().unwrap().to_string();
-            let mut sum = if let Some("(") = tokens.peek() {
-                eval(tokens, env).unwrap()
-            } else if let Ok(num) = tokens.peek().unwrap().parse::<i32>() {
+        Some(Token::Symbol(s)) => match s.as_str() {
+            "+" | "-" | "*" | "/" => {
                 tokens.consume();
-                num
-            } else {
-                env.vars[tokens.next().unwrap()]
-            };
-            let calc = match &*op {
+                let mut sum = match tokens.peek().unwrap() {
+                    Token::LParen => eval(tokens, env).unwrap(),
+                    Token::Number(num) => {
+                        tokens.consume();
+                        *num
+                    }
+                    Token::Symbol(sym) => {
+                        tokens.consume();
+                        env.vars[sym]
+                    }
+                    _ => unreachable!()
+                };
+                let calc = match s.as_str() {
                     "+" => |sum: i32, num: i32| sum.checked_add(num),
                     "-" => |sum: i32, num: i32| sum.checked_sub(num),
                     "*" => |sum: i32, num: i32| sum.checked_mul(num),
                     "/" => |sum: i32, num: i32| sum.checked_div(num),
                     _  => unreachable!(),
-            };
-            while let Some(token) = tokens.peek() {
-                if token == ")" {
-                    tokens.next();
-                    break;
-                }
-                let num = if token == "(" {
-                    eval(tokens, env).unwrap()
-                } else if let Ok(num) = tokens.peek().unwrap().parse::<i32>() {
-                    tokens.consume();
-                    num
-                } else {
-                    env.vars[tokens.next().unwrap()]
                 };
-                if let Some(result) = calc(sum, num) {
-                    sum = result;
-                } else {
-                    return Err(format!("failed calculation"));
+                while let Some(token) = tokens.peek() {
+                    if *token == Token::RParen {
+                        tokens.next();
+                        break;
+                    }
+                    let num = match tokens.peek().unwrap() {
+                        Token::LParen => eval(tokens, env).unwrap(),
+                        Token::Number(num) => {
+                            tokens.consume();
+                            *num
+                        }
+                        Token::Symbol(sym) => {
+                            tokens.consume();
+                            env.vars[sym]
+                        }
+                        _ => unreachable!()
+                    };
+                    if let Some(result) = calc(sum, num) {
+                        sum = result;
+                    } else {
+                        return Err(format!("failed calculation"));
+                    }
+                }
+                return Ok(sum);
+            }
+            // 変数に代入
+            "setq" => {
+                tokens.consume();
+                while let Some(token) = tokens.peek() {
+                    if *token == Token::RParen {
+                        tokens.consume();
+                        break;
+                    }
+                    let var = if let Some(Token::Symbol(var)) = tokens.next() {
+                        &*var
+                    } else {
+                        panic!("expect variable");
+                    };
+                    let val = if let Some(Token::LParen) = tokens.peek() {
+                        eval(tokens, env).unwrap()
+                    } else if let Some(Token::Number(num)) = tokens.next() {
+                        *num
+                    } else {
+                        panic!("expect value");
+                    };
+                    env.vars.insert(*var, val);
                 }
             }
-            return Ok(sum);
-        }
-        Some(token) => {
-            match token {
-                // 変数に代入
-                "setq" => {
+            // 関数定義
+            "defun" => {
+                tokens.consume();
+                let funcname = if let Some(Token::Symbol(funcname)) = tokens.next() {
+                    &*funcname
+                } else {
+                    panic!("expect function name");
+                };
+                if *tokens.next().unwrap() != Token::LParen {
+                    return Err(format!("expect: '('"));
+                }
+                let mut params = vec![];
+                while let Some(token) = tokens.next() {
+                    if *token == Token::RParen {
+                        break;
+                    }
+                    if let Token::Symbol(param) = token {
+                        params.push(param.to_string());
+                    } else {
+                        panic!("invalid ident");
+                    }
+                }
+                if *tokens.next().unwrap() != Token::LParen {
+                    return Err(format!("expect: '('"));
+                }
+                let mut body = vec![Token::LParen];
+                let mut paren_count = 0;
+                while let Some(token) = tokens.next() {
+                    body.push(*token);
+                    if *token == Token::RParen  && paren_count == 0 {
+                        break;
+                    }
+                    if *token == Token::LParen { paren_count += 1; }
+                    if *token == Token::RParen { paren_count -= 1; }
+                }
+                env.funs.insert(funcname.to_string(), (params, body));
+            }
+            ident => {
+                if let Some(var) = env.vars.get(ident) {
+                    // 変数
                     tokens.consume();
+                    return Ok(*var);
+                } else if env.funs.contains_key(ident) {
+                    // 関数呼び出し
+                    let (params, body) = env.funs.get(ident).unwrap();
+                    tokens.consume();
+                    let mut params_iter = params.iter();
+                    let mut params_env  = Env::new();
                     while let Some(token) = tokens.peek() {
-                        if token == ")" {
+                        if *token == Token::RParen {
                             tokens.consume();
                             break;
                         }
-                        let var = tokens
-                            .next()
-                            .expect("expect variable")
-                            .to_string();
-                        let val = if let Some("(") = tokens.peek() {
-                            eval(tokens, env).unwrap()
-                        } else {
-                            tokens
-                                .next()
-                                .expect("expect value")
-                                .parse::<i32>()
-                                .unwrap()
-                        };
-                        env.vars.insert(var, val);
-                    }
-                }
-                // 関数定義
-                "defun" => {
-                    tokens.consume();
-                    let funcname = tokens
-                        .next()
-                        .expect("function name")
-                        .to_string();
-                    if tokens.next().unwrap() != "(" {
-                        return Err(format!("expect: '('"));
-                    }
-                    let mut params = vec![];
-                    while let Some(token) = tokens.next() {
-                        if token == ")" {
-                            break;
-                        }
-                        params.push(token.to_string());
-                    }
-                    if tokens.next().unwrap() != "(" {
-                        return Err(format!("expect: '('"));
-                    }
-                    let mut body = vec!["(".to_string()];
-                    let mut paren_count = 0;
-                    while let Some(token) = tokens.next() {
-                        body.push(token.to_string());
-                        if token == ")" && paren_count == 0 {
-                            break;
-                        }
-                        if token == "(" { paren_count += 1; }
-                        if token == ")" { paren_count -= 1; }
-                    }
-                    env.funs.insert(funcname, (params, body));
-                }
-                ident => {
-                    if let Some(var) = env.vars.get(ident) {
-                        // 変数
-                        tokens.consume();
-                        return Ok(*var);
-                    } else if env.funs.contains_key(ident) {
-                        // 関数呼び出し
-                        let (params, body) = env.funs.get(ident).unwrap().clone();
-                        tokens.consume();
-                        let mut params_iter = params.iter();
-                        let mut params_env  = Env::new();
-                        while let Some(token) = tokens.peek() {
-                            if token == ")" {
-                                tokens.consume();
-                                break;
-                            }
-                            // 仮引数に実引数を代入
-                            params_env.vars.insert(
-                                params_iter.next().unwrap().to_string(),
-                                if token == "(" {
-                                    eval(tokens, env).unwrap()
-                                } else if let Ok(num) = token.parse::<i32>() {
+                        // 仮引数に実引数を代入
+                        params_env.vars.insert(
+                            params_iter.next().unwrap().to_string(),
+                            match tokens.peek().unwrap() {
+                                Token::LParen => eval(tokens, env).unwrap(),
+                                Token::Number(num) => {
                                     tokens.consume();
-                                    num
-                                } else {
-                                    let var = env.vars[token];
-                                    tokens.consume();
-                                    var
+                                    *num
                                 }
-                            );
-                        }
-                        return eval(&mut Tokens { tokens: body, pos: 0 }, &mut params_env);
-                    } else {
-                        unimplemented!()
+                                Token::Symbol(sym) => {
+                                    tokens.consume();
+                                    env.vars[sym]
+                                }
+                                _ => unreachable!()
+                            }
+                        );
                     }
+                    return eval(&mut Tokens { tokens: body.to_vec(), pos: 0 }, &mut params_env);
+                } else {
+                    unimplemented!()
                 }
             }
         }
+        Some(Token::Number(n)) => return Ok(*n),
         None => (),
+        token => return Err(format!("unexpected token: {:?}", token.unwrap())),
     }
 
     if tokens.eof() {
@@ -214,15 +233,21 @@ fn eval(tokens: &mut Tokens, env: &mut Env) -> Result<i32, String> {
     }
 }
 
-fn tokenize(expr: &str) -> Tokens {
-    let replaced_expr = expr
+fn tokenize(program: &str) -> Tokens {
+    Tokens::new(program
         .replace('(', " ( ")
-        .replace(')', " ) ");
-    Tokens::new(
-        replaced_expr
-            .split_whitespace()
-            .map(|token| token.to_string())
-            .collect()
+        .replace(')', " ) ")
+        .split_whitespace()
+        .map(|token| match token {
+            "(" => Token::LParen,
+            ")" => Token::RParen,
+            _  => if let Ok(num) = token.parse::<i32>() {
+                Token::Number(num)
+            } else {
+                Token::Symbol(token.to_string())
+            }
+        })
+        .collect()
     )
 }
 
@@ -233,16 +258,16 @@ mod tests {
     #[test]
     fn test_tokenize() {
         assert_eq!(tokenize("(+ 1 2 (- 4 2))"), Tokens { tokens: vec![
-            "(".to_string(),
-            "+".to_string(),
-            "1".to_string(),
-            "2".to_string(),
-            "(".to_string(),
-            "-".to_string(),
-            "4".to_string(),
-            "2".to_string(),
-            ")".to_string(),
-            ")".to_string(),
+            Token::LParen,
+            Token::Symbol("+".to_string()),
+            Token::Symbol("1".to_string()),
+            Token::Symbol("2".to_string()),
+            Token::LParen,
+            Token::Symbol("-".to_string()),
+            Token::Symbol("4".to_string()),
+            Token::Symbol("2".to_string()),
+            Token::RParen,
+            Token::RParen,
         ], pos: 0});
     }
 
