@@ -10,6 +10,13 @@ enum Token {
     Minus,
     Asterisk,
     Slash,
+    Ne,
+    Eq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    If,
 }
 
 #[derive(Debug)]
@@ -70,15 +77,17 @@ fn main() {
 }
 
 fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
-    if tokens.next().unwrap() != Token::LParen {
-        return Err(format!("expect: '('"));
+    if let Some(token) = tokens.next() {
+        if token != Token::LParen {
+            return Err(format!("expect: '(', but got: '{:?}'", token));
+        }
     }
 
     match tokens.peek() {
-        Some(Token::Plus) |
-        Some(Token::Minus) |
+        Some(Token::Plus)     |
+        Some(Token::Minus)    |
         Some(Token::Asterisk) |
-        Some(Token::Slash) => {
+        Some(Token::Slash)    => {
             let op = tokens.next().unwrap();
             let mut sum = match tokens.peek().unwrap() {
                 Token::LParen => eval(tokens, env).unwrap(),
@@ -123,6 +132,122 @@ fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
                 }
             }
             return Ok(sum);
+        }
+        Some(Token::Ne) |
+        Some(Token::Eq) |
+        Some(Token::Lt) |
+        Some(Token::Le) |
+        Some(Token::Gt) |
+        Some(Token::Ge) => {
+            let op = tokens.next().unwrap();
+            let mut target = match tokens.peek().unwrap() {
+                Token::LParen => eval(tokens, env).unwrap(),
+                Token::Number(num) => {
+                    tokens.consume();
+                    num
+                }
+                Token::Symbol(sym) => {
+                    tokens.consume();
+                    env.vars[&sym]
+                }
+                _ => unreachable!()
+            };
+            let calc = match op {
+                Token::Eq => |target: i32, num: i32| if target == num { 1 } else { 0 },
+                Token::Ne => |target: i32, num: i32| if target != num { 1 } else { 0 },
+                Token::Lt => |target: i32, num: i32| if target <  num { 1 } else { 0 },
+                Token::Le => |target: i32, num: i32| if target <= num { 1 } else { 0 },
+                Token::Gt => |target: i32, num: i32| if target >  num { 1 } else { 0 },
+                Token::Ge => |target: i32, num: i32| if target >= num { 1 } else { 0 },
+                _ => unreachable!(),
+            };
+            while let Some(token) = tokens.peek() {
+                if token == Token::RParen {
+                    tokens.next();
+                    break;
+                }
+                let num = match tokens.peek().unwrap() {
+                    Token::LParen => eval(tokens, env).unwrap(),
+                    Token::Number(num) => {
+                        tokens.consume();
+                        num
+                    }
+                    Token::Symbol(sym) => {
+                        tokens.consume();
+                        env.vars[&sym]
+                    }
+                    _ => unreachable!()
+                };
+                target = calc(target, num);
+            }
+            return Ok(target);
+        }
+        Some(Token::If) => {
+            tokens.consume();
+            let comp = match tokens.peek().unwrap() {
+                Token::LParen => eval(tokens, env).unwrap(),
+                Token::Number(num) => {
+                    tokens.consume();
+                    num
+                }
+                Token::Symbol(sym) => {
+                    tokens.consume();
+                    env.vars[&sym]
+                }
+                _ => unreachable!()
+            };
+            if comp != 0 {
+                let t = match tokens.peek().unwrap() {
+                    Token::LParen => eval(tokens, env).unwrap(),
+                    Token::Number(num) => {
+                        tokens.consume();
+                        num
+                    }
+                    Token::Symbol(sym) => {
+                        tokens.consume();
+                        env.vars[&sym]
+                    }
+                    _ => unreachable!()
+                };
+                // skip nil
+                let mut paren_count = 0;
+                while let Some(token) = tokens.next() {
+                    if token == Token::RParen  && paren_count == 0 {
+                        break;
+                    }
+                    if token == Token::LParen { paren_count += 1; }
+                    if token == Token::RParen { paren_count -= 1; }
+                }
+                return Ok(t);
+            } else {
+                // skip t
+                match tokens.next().unwrap() {
+                    Token::LParen => {
+                        let mut paren_count = 0;
+                        while let Some(token) = tokens.next() {
+                            if token == Token::RParen  && paren_count == 0 {
+                                break;
+                            }
+                            if token == Token::LParen { paren_count += 1; }
+                            if token == Token::RParen { paren_count -= 1; }
+                        }
+                    }
+                    _ => (),
+                }
+                let nil = match tokens.peek().unwrap() {
+                    Token::LParen => eval(tokens, env).unwrap(),
+                    Token::Number(num) => {
+                        tokens.consume();
+                        num
+                    }
+                    Token::Symbol(sym) => {
+                        tokens.consume();
+                        env.vars[&sym]
+                    }
+                    _ => unreachable!()
+                };
+                return Ok(nil);
+            }
         }
         Some(Token::Symbol(s)) => match s.as_str() {
             // 変数に代入
@@ -184,6 +309,9 @@ fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
                     if token == Token::RParen { paren_count -= 1; }
                 }
                 env.funs.insert(funcname, (params, body));
+                if tokens.next().unwrap() != Token::RParen {
+                    return Err(format!("expect: ')'"));
+                }
             }
             ident => {
                 if let Some(var) = env.vars.get(ident) {
@@ -218,9 +346,10 @@ fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
                             }
                         );
                     }
+                    params_env.funs = env.funs.clone();
                     return eval(&mut Parser { tokens: body.to_vec(), pos: 0 }, &mut params_env);
                 } else {
-                    unimplemented!()
+                    return Err(format!("invalid ident: '{ident}'"));
                 }
             }
         }
@@ -242,12 +371,21 @@ fn tokenize(program: &str) -> Parser {
         .replace(')', " ) ")
         .split_whitespace()
         .map(|token| match token {
-            "(" => Token::LParen,
-            ")" => Token::RParen,
-            "+" => Token::Plus,
-            "-" => Token::Minus,
-            "*" => Token::Asterisk,
-            "/" => Token::Slash,
+            "("   => Token::LParen,
+            ")"   => Token::RParen,
+            "+"   => Token::Plus,
+            "-"   => Token::Minus,
+            "*"   => Token::Asterisk,
+            "/"   => Token::Slash,
+            "="   => Token::Eq,
+            "/="  => Token::Ne,
+            "<"   => Token::Lt,
+            "<="  => Token::Le,
+            ">"   => Token::Gt,
+            ">="  => Token::Ge,
+            "t"   => Token::Number(1),
+            "nil" => Token::Number(0),
+            "if"  => Token::If,
             _  => if let Ok(num) = token.parse::<i32>() {
                 Token::Number(num)
             } else {
@@ -312,9 +450,30 @@ mod tests {
         assert_eq!(eval(&mut tokenize("(setq x 10) (setq y (+ x 100)) (y)"), &mut env), Ok(110));
 
         // 関数
-        assert_eq!(eval(&mut tokenize("(defun add (a b) (+ a b) (add 1 2)"), &mut env), Ok(3));
-        assert_eq!(eval(&mut tokenize("(defun add (a b) (+ a b) (add (add 1 2) 3)"), &mut env), Ok(6));
-        assert_eq!(eval(&mut tokenize("(defun add (a b) (+ a b) (add 1 (add 2 3))"), &mut env), Ok(6));
-        assert_eq!(eval(&mut tokenize("(defun foo (a b c) (+ a (* c 2) b) (foo 1 2 3)"), &mut env), Ok(9));
+        assert_eq!(eval(&mut tokenize("(defun add (a b) (+ a b)) (add 1 2)"), &mut env), Ok(3));
+        assert_eq!(eval(&mut tokenize("(defun add (a b) (+ a b)) (add (add 1 2) 3)"), &mut env), Ok(6));
+        assert_eq!(eval(&mut tokenize("(defun add (a b) (+ a b)) (add 1 (add 2 3))"), &mut env), Ok(6));
+        assert_eq!(eval(&mut tokenize("(defun foo (a b c) (+ a (* c 2) b)) (foo 1 2 3)"), &mut env), Ok(9));
+
+        // 比較
+        assert_eq!(eval(&mut tokenize("(= 1 2)"),  &mut env), Ok(0));
+        assert_eq!(eval(&mut tokenize("(= 2 2)"),  &mut env), Ok(1));
+        assert_eq!(eval(&mut tokenize("(/= 1 2)"), &mut env), Ok(1));
+        assert_eq!(eval(&mut tokenize("(/= 2 2)"), &mut env), Ok(0));
+        assert_eq!(eval(&mut tokenize("(< 1 2)"),  &mut env), Ok(1));
+        assert_eq!(eval(&mut tokenize("(< 2 2)"),  &mut env), Ok(0));
+        assert_eq!(eval(&mut tokenize("(> 2 2)"),  &mut env), Ok(0));
+        assert_eq!(eval(&mut tokenize("(> 2 1)"),  &mut env), Ok(1));
+        assert_eq!(eval(&mut tokenize("(<= 1 1)"), &mut env), Ok(1));
+        assert_eq!(eval(&mut tokenize("(<= 2 1)"), &mut env), Ok(0));
+        assert_eq!(eval(&mut tokenize("(>= 2 2)"), &mut env), Ok(1));
+        assert_eq!(eval(&mut tokenize("(>= 1 2)"), &mut env), Ok(0));
+
+        // 分岐
+        assert_eq!(eval(&mut tokenize("(if t 10 100)"),   &mut env), Ok(10));
+        assert_eq!(eval(&mut tokenize("(if 1 10 100)"),   &mut env), Ok(10));
+        assert_eq!(eval(&mut tokenize("(if nil 10 100)"), &mut env), Ok(100));
+        assert_eq!(eval(&mut tokenize("(if (+ 1 2) (+ 1 10) (+ 1 100))"),   &mut env), Ok(11));
+        assert_eq!(eval(&mut tokenize("(defun fib (x) (if (<= x 1) 1 (+ (fib (- x 1)) (fib (- x 2))))) (fib 9)"), &mut env), Ok(55));
     }
 }
