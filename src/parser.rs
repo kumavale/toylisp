@@ -20,13 +20,13 @@ enum Token {
 }
 
 #[derive(Debug)]
-struct Env {
+pub struct Env {
     vars: HashMap<String, i32>,
     funs: HashMap<String, (Vec<String>, Vec<Token>)>, // (params, body)
 }
 
 impl Env {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             vars: HashMap::new(),
             funs: HashMap::new(),
@@ -34,7 +34,7 @@ impl Env {
     }
 }
 #[derive(Debug, PartialEq)]
-struct Parser {
+pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
 }
@@ -68,7 +68,7 @@ impl Parser {
     }
 }
 
-fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
+pub fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
     if let Some(token) = tokens.next() {
         if token != Token::LParen {
             return Err(format!("expect: '(', but got: '{:?}'", token));
@@ -368,7 +368,7 @@ fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
     }
 }
 
-fn tokenize(program: &str) -> Parser {
+pub fn tokenize(program: &str) -> Parser {
     Parser::new(
         program
             .replace('(', " ( ")

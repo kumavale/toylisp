@@ -1,5 +1,8 @@
 mod parser;
+mod repl;
 
-fn main() {
-    println!("Hello, world!");
+fn main() -> Result<(), String> {
+    repl::run()?;
+
+    Ok(())
 }
