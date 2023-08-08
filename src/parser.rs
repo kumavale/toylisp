@@ -64,7 +64,7 @@ impl Parser {
     }
 
     fn peek(&self) -> Option<Token> {
-        self.tokens.get(self.pos).map(|token| token.clone())
+        self.tokens.get(self.pos).cloned()
     }
 }
 
@@ -117,7 +117,7 @@ pub fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
                 if let Some(result) = calc(sum, num) {
                     sum = result;
                 } else {
-                    return Err(format!("failed calculation"));
+                    return Err("failed calculation".to_string());
                 }
             }
             return Ok(sum);
@@ -210,22 +210,19 @@ pub fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
                 return Ok(t);
             } else {
                 // skip t
-                match tokens.next().unwrap() {
-                    Token::LParen => {
-                        let mut paren_count = 0;
-                        while let Some(token) = tokens.next() {
-                            if token == Token::RParen && paren_count == 0 {
-                                break;
-                            }
-                            if token == Token::LParen {
-                                paren_count += 1;
-                            }
-                            if token == Token::RParen {
-                                paren_count -= 1;
-                            }
+                if tokens.next().unwrap() == Token::LParen {
+                    let mut paren_count = 0;
+                    while let Some(token) = tokens.next() {
+                        if token == Token::RParen && paren_count == 0 {
+                            break;
+                        }
+                        if token == Token::LParen {
+                            paren_count += 1;
+                        }
+                        if token == Token::RParen {
+                            paren_count -= 1;
                         }
                     }
-                    _ => (),
                 }
                 let nil = match tokens.peek().unwrap() {
                     Token::LParen => eval(tokens, env).unwrap(),
@@ -275,7 +272,7 @@ pub fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
                     panic!("expect function name");
                 };
                 if tokens.next().unwrap() != Token::LParen {
-                    return Err(format!("expect: '('"));
+                    return Err("expect: '('".to_string());
                 }
                 let mut params = vec![];
                 while let Some(token) = tokens.next() {
@@ -289,7 +286,7 @@ pub fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
                     }
                 }
                 if tokens.next().unwrap() != Token::LParen {
-                    return Err(format!("expect: '('"));
+                    return Err("expect: '('".to_string());
                 }
                 let mut body = vec![Token::LParen];
                 let mut paren_count = 0;
@@ -307,7 +304,7 @@ pub fn eval(tokens: &mut Parser, env: &mut Env) -> Result<i32, String> {
                 }
                 env.funs.insert(funcname, (params, body));
                 if tokens.next().unwrap() != Token::RParen {
-                    return Err(format!("expect: ')'"));
+                    return Err("expect: ')'".to_string());
                 }
             }
             ident => {

@@ -1,5 +1,5 @@
+use crate::parser::{eval, tokenize, Env};
 use std::io::prelude::*;
-use crate::parser::{Env, eval, tokenize};
 
 pub fn run() -> Result<(), String> {
     println!("Ctrl+C to exit.\n");
